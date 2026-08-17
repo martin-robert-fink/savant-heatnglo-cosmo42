@@ -92,6 +92,22 @@ class StatusTest < Minitest::Test
     assert_equal 21, status['setpoint_c']
   end
 
+  # The Climate tile has one mode where the appliance has two flags.
+  def test_hvac_mode_collapses_power_and_thermostat
+    off = build('power' => 0, 'thermostat' => 0)
+    assert_equal 'Off', off['hvac_mode']
+    assert_equal [1, 0, 0], off.values_at('hvac_mode_off', 'hvac_mode_heat', 'hvac_mode_auto')
+
+    heat = build('power' => 1, 'thermostat' => 0)
+    assert_equal 'Heat', heat['hvac_mode']
+    assert_equal [0, 1, 0], heat.values_at('hvac_mode_off', 'hvac_mode_heat', 'hvac_mode_auto')
+
+    # Thermostat wins: burning under thermostat control is Auto, not Heat.
+    auto = build('power' => 1, 'thermostat' => 1)
+    assert_equal 'Auto', auto['hvac_mode']
+    assert_equal [0, 0, 1], auto.values_at('hvac_mode_off', 'hvac_mode_heat', 'hvac_mode_auto')
+  end
+
   # Before the first successful poll the profile still needs every path to
   # exist, or its state variables never initialize.
   def test_offline_document_has_the_same_keys_as_a_live_one

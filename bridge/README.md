@@ -99,6 +99,7 @@ Every endpoint answers `200` with the same flat status document, so the Savant p
 | `GET /thermostat/c/<°C>` | Setpoint in whole Celsius degrees (0–37) |
 | `GET /thermostat/raw/<0-3700>` | Setpoint in the device's own hundredths-of-°C |
 | `GET /thermostat/up\|down\|off` | Nudge by 1 °F, or disable |
+| `GET /hvac/off\|heat\|auto` | Climate mode: extinguish / burn now / burn to setpoint |
 | `GET /timer/<0-180>` | Auto-off timer in minutes |
 | `GET /timer/off` | Cancel the timer |
 | `GET /pilot/on\|off` | Standing pilot |

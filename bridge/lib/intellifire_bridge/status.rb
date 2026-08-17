@@ -65,6 +65,19 @@ module IntellifireBridge
         'prepurge' => int(poll['prepurge']),
 
         'thermostat' => int(poll['thermostat']),
+        # Savant's HVAC service thinks in modes, not flags, so collapse the
+        # appliance's two independent booleans into one:
+        #
+        #   thermostat on          -> Auto  (burn until the setpoint is met)
+        #   burning, no thermostat -> Heat  (burn now, ignore temperature)
+        #   neither                -> Off
+        #
+        # Heat is what the Pro App labels the plain "on" mode; the appliance has
+        # no cooling, so Cool is never reported.
+        'hvac_mode' => hvac_mode(poll),
+        'hvac_mode_off' => hvac_mode(poll) == 'Off' ? 1 : 0,
+        'hvac_mode_heat' => hvac_mode(poll) == 'Heat' ? 1 : 0,
+        'hvac_mode_auto' => hvac_mode(poll) == 'Auto' ? 1 : 0,
         'setpoint_raw' => setpoint_raw,
         'setpoint_c' => centi_to_c(setpoint_raw),
         'setpoint_f' => centi_to_f(setpoint_raw),
@@ -106,6 +119,8 @@ module IntellifireBridge
         'light_level' => 0, 'light_percent' => 0,
         'pilot' => 0, 'hot' => 0, 'prepurge' => 0,
         'thermostat' => 0,
+        'hvac_mode' => 'Off',
+        'hvac_mode_off' => 1, 'hvac_mode_heat' => 0, 'hvac_mode_auto' => 0,
         'setpoint_raw' => 0, 'setpoint_c' => 0, 'setpoint_f' => 32,
         'temperature_c' => 0, 'temperature_f' => 32,
         'timer' => 0, 'time_remaining_s' => 0, 'time_remaining_min' => 0,
@@ -114,6 +129,14 @@ module IntellifireBridge
         'serial' => '', 'firmware' => '', 'ip' => '', 'uptime' => 0,
         'age_ms' => 0, 'poll_errors' => poll_errors.to_i
       }
+    end
+
+    # Off / Heat / Auto, from the appliance's power and thermostat flags.
+    def hvac_mode(poll)
+      return 'Auto' if int(poll['thermostat']) == 1
+      return 'Heat' if int(poll['power']) == 1
+
+      'Off'
     end
 
     # A 0..steps level as a 0-100 percentage, for Savant's dimmer slider.

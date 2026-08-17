@@ -121,6 +121,40 @@ class RouterTest < Minitest::Test
     assert_empty @client.sent
   end
 
+  # Savant's Climate tile sends one mode; the appliance needs two commands for
+  # it, because power and thermostat are independent there.
+  def test_hvac_modes_map_onto_power_and_thermostat
+    get('/hvac/off')
+    assert_equal ['thermostat_setpoint', 0], @client.sent[-2]
+    assert_equal %w[power].push(0), @client.sent.last
+
+    @client.sent.clear
+    get('/hvac/heat') # burn now, no thermostat
+    assert_equal ['thermostat_setpoint', 0], @client.sent[-2]
+    assert_equal %w[power].push(1), @client.sent.last
+
+    @client.sent.clear
+    get('/hvac/auto') # burn to the setpoint the appliance already holds
+    assert_equal %w[power].push(1), @client.sent[-2]
+    assert_equal ['thermostat_setpoint', 2200], @client.sent.last
+  end
+
+  # Leaving Auto zeroes the setpoint on the appliance, so the bridge keeps a
+  # copy. Coming back must restore the chosen temperature, not a default.
+  def test_auto_restores_the_setpoint_that_heat_mode_cleared
+    get('/hvac/heat') # fixture setpoint 2200 == 72 F, now zeroed
+    @client.sent.clear
+
+    get('/hvac/auto')
+    assert_equal ['thermostat_setpoint', 2200], @client.sent.last
+  end
+
+  def test_hvac_rejects_an_unknown_mode
+    status, = get('/hvac/cool')
+    assert_equal 400, status
+    assert_empty @client.sent
+  end
+
   def test_timer_is_specified_in_minutes
     get('/timer/45')
     assert_equal ['time_remaining', 2700], @client.sent.last

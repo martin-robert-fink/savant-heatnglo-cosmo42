@@ -33,11 +33,12 @@ The bridge is stdlib-only Ruby (~700 lines), runs on the Savant host under `laun
 
 ## What you get
 
-- **On / Off** — the fireplace appears as a Trigger Controlled Device service, the same service Savant's own Escea profile uses
+- **Climate tile** — the fireplace as a heater: ambient temperature, heat setpoint, and three modes. **Off** extinguishes, **Heat** burns now regardless of temperature, **Auto** burns until the setpoint is met. Savant's HVAC vocabulary has no "on", so Heat is the plain-on mode; cooling, fan modes and humidity are not modelled because the appliance has none
+- **On / Off** — the fireplace also appears as a Trigger Controlled Device service, the same service Savant's own Escea profile uses
 - **Flame height** — 5 discrete levels, as preset actions or as a 0–100 slider
 - **Blower** — 5 speeds, preset actions or slider
 - **Accent light** — 4 levels, preset actions or slider
-- **Thermostat** — setpoint in whole °F or °C, plus up/down nudges and off
+- **Thermostat** — setpoint in whole °F or °C, plus up/down nudges and off. Disabling it means writing a zero setpoint to the appliance, so the bridge keeps a copy of your temperature and restores it when you return to Auto
 - **Auto-off timer** — 30/60/120-minute presets or any value up to 3 hours
 - **Standing pilot** on/off, **locate chirp**, and **soft-reset** after a failed ignition
 - **Live status** — burner state, flame/blower/light levels, room temperature, setpoint, timer remaining, pilot, still-hot flag, appliance error text, firmware and serial. Polled every 5 seconds, so the app tracks changes made at the fireplace's own panel or in the IntelliFire app

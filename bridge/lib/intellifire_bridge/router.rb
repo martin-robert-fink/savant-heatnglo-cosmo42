@@ -29,6 +29,7 @@ module IntellifireBridge
     MAX_TIMER_MINUTES = 180
     SETPOINT_MIN_C = 0
     SETPOINT_MAX_C = 37
+    DEFAULT_SETPOINT_F = 68 # used when the thermostat has never been set
 
     def initialize(controller:, version: IntellifireBridge::VERSION, logger: nil)
       @controller = controller
@@ -52,6 +53,7 @@ module IntellifireBridge
       when 'light' then channel(:light, rest)
       when 'dimmer' then dimmer(rest)
       when 'thermostat' then thermostat(rest)
+      when 'hvac' then hvac(rest)
       when 'timer' then timer(rest)
       when 'pilot' then pilot(rest)
       when 'beep' then send_simple('beep', 1)
@@ -151,6 +153,54 @@ module IntellifireBridge
       send_simple('thermostat_setpoint', raw)
     end
 
+    # /hvac/off  /hvac/heat  /hvac/auto
+    #
+    # The three modes Savant's Climate tile drives:
+    #
+    #   off   clear the setpoint, extinguish
+    #   heat  burn now at whatever flame height is set, no thermostat
+    #   auto  burn until the setpoint is met, at whatever setpoint the
+    #         appliance already holds (68 F if it has never been set)
+    #
+    # Each mode is two appliance commands, because the appliance models power
+    # and thermostat separately. The first goes through the controller
+    # directly and the second through send_simple, so the status document
+    # returned to Savant reflects both.
+    def hvac(rest)
+      word = rest.first.to_s.downcase
+
+      case word
+      when 'off'
+        remember_setpoint
+        @controller.send_command('thermostat_setpoint', 0)
+        send_simple('power', 0)
+      when 'heat'
+        remember_setpoint
+        @controller.send_command('thermostat_setpoint', 0)
+        send_simple('power', 1)
+      when 'auto'
+        @controller.send_command('power', 1)
+        send_simple('thermostat_setpoint', auto_setpoint)
+      else raise ArgumentError, "hvac expects off/heat/auto, got #{word.inspect}"
+      end
+    end
+
+    # Turning the thermostat off means zeroing its setpoint on the appliance,
+    # which loses the number. Keep a copy so returning to Auto returns to the
+    # temperature the user actually chose rather than a default.
+    def remember_setpoint
+      current = @controller.status['setpoint_f'].to_i
+      @remembered_setpoint_f = current if current > 32
+    end
+
+    def auto_setpoint
+      current = @controller.status['setpoint_f'].to_i
+      return f_to_raw(current) if current > 32
+      return f_to_raw(@remembered_setpoint_f) if @remembered_setpoint_f
+
+      f_to_raw(DEFAULT_SETPOINT_F)
+    end
+
     # /timer/45 (minutes)  /timer/off
     def timer(rest)
       word = rest.first.to_s.downcase
@@ -170,7 +220,7 @@ module IntellifireBridge
     # One degree Fahrenheit at a time, which is what the app's arrows do.
     def step_setpoint(direction)
       current_f = @controller.status['setpoint_f'].to_i
-      current_f = 68 if current_f <= 32 # thermostat was off; start somewhere sane
+      current_f = DEFAULT_SETPOINT_F if current_f <= 32 # thermostat was off; start somewhere sane
       f_to_raw(current_f + direction)
     end
 

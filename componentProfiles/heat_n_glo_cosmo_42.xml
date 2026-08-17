@@ -126,6 +126,7 @@
             <environmental_media/>
             <resource resource_type="ENV_GENERALTRIGGERCONTROLLEDDEVICE_SOURCE"/>
             <resource resource_type="ENV_LIGHTINGCONTROLLER_SOURCE"/>
+            <resource resource_type="ENV_HVACCONTROLLER_SOURCE"/>
         </internal>
     </media_interfaces>
 
@@ -207,6 +208,59 @@
                                 owning_logical_component="Fireplace"
                                 state_center_binding="DimmerLevel"
                                 state_center_type="integer">0</dynamic_state_variable>
+
+        <!-- ============================================================
+             HVAC / CLIMATE STATES
+             These names are Savant's, not ours: the Climate tile binds to this
+             exact vocabulary (the same one the Carrier Infinity profile
+             publishes). Each is addressed, so the live state names carry the
+             thermostat entity's address suffix — with the single entity this
+             profile expects, that is _1_1.
+
+             Temperature formats are declared F and never updated; the bridge
+             reports Fahrenheit and the appliance has no other setting.
+             ============================================================ -->
+        <dynamic_state_variable name="ThermostatCurrentTemperature"
+                                owning_logical_component="Fireplace"
+                                state_center_binding="ThermostatCurrentTemperature"
+                                state_center_type="integer"
+                                note="Ambient temperature at the appliance, F">32</dynamic_state_variable>
+        <dynamic_state_variable name="ThermostatCurrentTemperatureFormat"
+                                owning_logical_component="Fireplace"
+                                state_center_binding="ThermostatCurrentTemperatureFormat"
+                                state_center_type="string">F</dynamic_state_variable>
+
+        <dynamic_state_variable name="ThermostatCurrentHeatPoint"
+                                owning_logical_component="Fireplace"
+                                state_center_binding="ThermostatCurrentHeatPoint"
+                                state_center_type="integer"
+                                note="Heat setpoint, F">32</dynamic_state_variable>
+        <dynamic_state_variable name="ThermostatCurrentHeatPointTemperatureFormat"
+                                owning_logical_component="Fireplace"
+                                state_center_binding="ThermostatCurrentHeatPointTemperatureFormat"
+                                state_center_type="string">F</dynamic_state_variable>
+        <dynamic_state_variable name="ThermostatCurrentSetPoint"
+                                owning_logical_component="Fireplace"
+                                state_center_binding="ThermostatCurrentSetPoint"
+                                state_center_type="integer">32</dynamic_state_variable>
+
+        <dynamic_state_variable name="CurrentHVACMode"
+                                owning_logical_component="Fireplace"
+                                state_center_binding="CurrentHVACMode"
+                                state_center_type="string"
+                                note="Off, Heat or Auto">Off</dynamic_state_variable>
+        <dynamic_state_variable name="IsCurrentHVACModeOff"
+                                owning_logical_component="Fireplace"
+                                state_center_binding="IsCurrentHVACModeOff"
+                                state_center_type="integer">1</dynamic_state_variable>
+        <dynamic_state_variable name="IsCurrentHVACModeHeat"
+                                owning_logical_component="Fireplace"
+                                state_center_binding="IsCurrentHVACModeHeat"
+                                state_center_type="integer">0</dynamic_state_variable>
+        <dynamic_state_variable name="IsCurrentHVACModeAuto"
+                                owning_logical_component="Fireplace"
+                                state_center_binding="IsCurrentHVACModeAuto"
+                                state_center_type="integer">0</dynamic_state_variable>
     </state_variable_list>
 
     <logical_component logical_component_name="Fireplace">
@@ -270,12 +324,31 @@
                     </values>
                     <values path="/none/setpoint_f" matches_required="at_least_one">
                         <update state="ThermostatSetPointF" type="integer"/>
+                        <update state="ThermostatCurrentHeatPoint_1_1" type="integer"/>
+                        <update state="ThermostatCurrentSetPoint_1_1" type="integer"/>
                     </values>
                     <values path="/none/temperature_c" matches_required="at_least_one">
                         <update state="CurrentTemperatureC" type="integer"/>
                     </values>
                     <values path="/none/temperature_f" matches_required="at_least_one">
                         <update state="CurrentTemperatureF" type="integer"/>
+                        <update state="ThermostatCurrentTemperature_1_1" type="integer"/>
+                    </values>
+
+                    <!-- The Climate tile's mode, collapsed by the bridge from
+                         the appliance's independent power and thermostat
+                         flags. _1_1 is the single thermostat entity. -->
+                    <values path="/none/hvac_mode" matches_required="at_least_one">
+                        <update state="CurrentHVACMode_1_1" type="string"/>
+                    </values>
+                    <values path="/none/hvac_mode_off" matches_required="at_least_one">
+                        <update state="IsCurrentHVACModeOff_1_1" type="integer"/>
+                    </values>
+                    <values path="/none/hvac_mode_heat" matches_required="at_least_one">
+                        <update state="IsCurrentHVACModeHeat_1_1" type="integer"/>
+                    </values>
+                    <values path="/none/hvac_mode_auto" matches_required="at_least_one">
+                        <update state="IsCurrentHVACModeAuto_1_1" type="integer"/>
                     </values>
 
                     <values path="/none/timer" matches_required="at_least_one">
@@ -464,6 +537,175 @@
                         <unique_identifier name="ChannelID" address_component="1"/>
                     </toggleOnUsingState>
                 </toggle_button_representation>
+            </entity>
+
+        </resource_component_actions>
+
+        <!-- ============================================================
+             HVAC RESOURCE - THE CLIMATE TILE
+             This is what puts the fireplace under Climate with an ambient
+             temperature reading, a heat setpoint, and three modes:
+
+               Off    clear the setpoint and extinguish
+               Heat   burn now at the current flame height, no thermostat
+               Auto   burn until the setpoint is met
+
+             Savant's HVAC vocabulary has no "on", so Heat is the plain-on
+             mode. Cool and the fan modes are deliberately absent: the
+             appliance cannot cool, and this profile does not model its blower
+             here (that is a Lighting entity, above, for units that have one).
+
+             Add ONE thermostat entity in the Blueprint data table, addressed
+             ThermostatAddress = 1, ThermostatAddress2 = 1, matching the _1_1
+             state names in the status parser above.
+
+             None of these actions update state optimistically: two-component
+             addressing makes wildcard updates fragile, and the status fetch
+             1.5 s later is authoritative anyway. The cost is that the tile
+             confirms a mode change a beat after you tap it.
+             ============================================================ -->
+        <resource_component_actions resource_type="ENV_HVACCONTROLLER_SOURCE">
+
+            <action name="SetHVACModeOff">
+                <action_argument name="ThermostatAddress" note="1 - the only thermostat on this component"/>
+                <action_argument name="ThermostatAddress2" note="1 - not used, addressing only"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">hvac/off</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <action name="SetHVACModeHeat">
+                <action_argument name="ThermostatAddress" note="1 - the only thermostat on this component"/>
+                <action_argument name="ThermostatAddress2" note="1 - not used, addressing only"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">hvac/heat</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <action name="SetHVACModeAuto">
+                <action_argument name="ThermostatAddress" note="1 - the only thermostat on this component"/>
+                <action_argument name="ThermostatAddress2" note="1 - not used, addressing only"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">hvac/auto</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <action name="SetHeatPointTemperature">
+                <action_argument name="ThermostatAddress" note="1 - the only thermostat on this component"/>
+                <action_argument name="ThermostatAddress2" note="1 - not used, addressing only"/>
+                <action_argument name="HeatPointTemperature" note="Setpoint in whole degrees Fahrenheit (33 - 98)"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">thermostat/f/</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" isHttpBody="false" action_argument="HeatPointTemperature"/>
+                        </parameter_list>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <action name="SetTemperature">
+                <action_argument name="ThermostatAddress" note="1 - the only thermostat on this component"/>
+                <action_argument name="ThermostatAddress2" note="1 - not used, addressing only"/>
+                <action_argument name="Temperature" note="Setpoint in whole degrees Fahrenheit (33 - 98)"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">thermostat/f/</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" isHttpBody="false" action_argument="Temperature"/>
+                        </parameter_list>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <action name="IncreaseHeatPointTemperature">
+                <action_argument name="ThermostatAddress" note="1 - the only thermostat on this component"/>
+                <action_argument name="ThermostatAddress2" note="1 - not used, addressing only"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">thermostat/up</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <action name="DecreaseHeatPointTemperature">
+                <action_argument name="ThermostatAddress" note="1 - the only thermostat on this component"/>
+                <action_argument name="ThermostatAddress2" note="1 - not used, addressing only"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">thermostat/down</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <action name="IncreaseTemperature">
+                <action_argument name="ThermostatAddress" note="1 - the only thermostat on this component"/>
+                <action_argument name="ThermostatAddress2" note="1 - not used, addressing only"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">thermostat/up</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <action name="DecreaseTemperature">
+                <action_argument name="ThermostatAddress" note="1 - the only thermostat on this component"/>
+                <action_argument name="ThermostatAddress2" note="1 - not used, addressing only"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">thermostat/down</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <action name="UpdateHVACStatus">
+                <action_argument name="ThermostatAddress" note="1 - the only thermostat on this component"/>
+                <action_argument name="ThermostatAddress2" note="1 - not used, addressing only"/>
+                <command_interface interface="ip">
+                    <command response_required="yes">
+                        <command_string type="character" http_request_type="GET">status</command_string>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+            </action>
+
+            <entity name="Thermostat" address_components="2">
+                <screen_representation>
+                    <common_unique_identifier name="ThermostatAddress" address_component="1"/>
+                    <common_unique_identifier name="ThermostatAddress2" address_component="2"/>
+                </screen_representation>
+                <query_status_with_action name="UpdateHVACStatus" period_ms="0">
+                    <with_arg name="ThermostatAddress" address_component="1"/>
+                    <with_arg name="ThermostatAddress2" address_component="2"/>
+                </query_status_with_action>
+                <query_status_with_action name="UpdateHVACStatus" period_ms="30000">
+                    <with_arg name="ThermostatAddress" address_component="1"/>
+                    <with_arg name="ThermostatAddress2" address_component="2"/>
+                </query_status_with_action>
             </entity>
 
         </resource_component_actions>

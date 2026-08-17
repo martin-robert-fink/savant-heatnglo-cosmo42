@@ -98,11 +98,48 @@ The port is **4568**, matching the bridge default. If you changed `INTELLIFIRE_B
 
 ## 5. Generate services
 
-Click **Generate Services**. You should get a **Trigger Controlled Device** service for the fireplace in that room.
+Click **Generate Services**. The profile declares three resources, so you get up to three services for the fireplace in that room:
 
-Then **Update All UI Screens → Sync to Services**, save, and upload to the host.
+| Service | What it gives you | Needs a data table entity? |
+|---|---|---|
+| **HVAC / Climate** | Ambient temperature, heat setpoint, Off / Heat / Auto | yes — one thermostat entity |
+| **Trigger Controlled Device** | Plain On / Off tile | no |
+| **Lighting Control** | 0–100 sliders for flame, accent light, blower | yes — one entity per channel |
 
-At this point the Pro App gives you **On / Off** and all the status feedback. Everything else is a custom action you place on a UI screen, bind to a keypad button, or call from a scene or workflow.
+> ### The `Show` checkbox is not the same as `Use`
+>
+> In **View Services**, pick the fireplace's **room** in the `Services for:` dropdown — services are listed per zone, and looking at the wrong zone shows you nothing. Each row then has **Use** *and* **Show**. `Use` realizes the service; **`Show` is what puts it in the Pro App**. Blueprint does not reliably default `Show` on for a newly generated service, and a service with `Use` ticked but `Show` clear is invisible in the app while looking completely healthy in Blueprint.
+
+Then **Update All UI Screens → Sync to Services**, save, and upload to the host. Force-quit the Pro App and reopen it — it caches the configuration.
+
+---
+
+## 5a. The Climate tile
+
+This is the service most people want: the fireplace as a heater with a thermostat.
+
+Add **one thermostat entity** to the HVAC data table, addressed:
+
+| Field | Value |
+|---|---|
+| `ThermostatAddress` | `1` |
+| `ThermostatAddress2` | `1` |
+
+Those two values must be `1`/`1` — the profile's status parser publishes its climate states under the matching `_1_1` suffix (`ThermostatCurrentTemperature_1_1`, `CurrentHVACMode_1_1`, and so on), which is the vocabulary Savant's Climate tile binds to.
+
+The three modes, and what each does to the appliance:
+
+| App mode | Bridge call | Appliance |
+|---|---|---|
+| **Off** | `GET /hvac/off` | Clears the setpoint, extinguishes |
+| **Heat** | `GET /hvac/heat` | Clears the setpoint, ignites — burns at the current flame height regardless of temperature |
+| **Auto** | `GET /hvac/auto` | Ignites and restores the setpoint — burns until the room reaches it |
+
+Savant's HVAC vocabulary has no "On", so **Heat is the plain-on mode**. Cool never appears; the appliance cannot cool. Fan modes and humidity are deliberately not modelled.
+
+> **Why the bridge remembers your setpoint.** Turning the appliance's thermostat off means writing a setpoint of `0` — there is no separate disable. So leaving Auto would otherwise discard the temperature you chose. The bridge keeps a copy and restores it when you return to Auto; only if it has never seen one does it fall back to 68 °F.
+
+Mode changes confirm about 1.5 s after you tap, when the follow-up status fetch lands. That lag is deliberate — the appliance's own report is authoritative, rather than the tile asserting a state it only hopes is true.
 
 ---
 
