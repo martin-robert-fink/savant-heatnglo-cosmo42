@@ -2,17 +2,33 @@
 # Installs intellifire-bridge into /Users/Shared/intellifire-bridge and loads it
 # under launchd. Run this on the Savant host.
 #
-#   ./install.sh
+#   ./install.sh            per-user LaunchAgent (starts at GUI login)
+#   ./install.sh --daemon   system LaunchDaemon  (starts at boot, needs sudo)
+#
+# --daemon still runs the bridge as the invoking user, not root; it only needs
+# sudo to place the plist in /Library/LaunchDaemons. Use it on a host that must
+# come back on its own after an unattended reboot.
 #
 # Re-running is safe: code is refreshed, credentials.json is left alone.
 set -euo pipefail
 
 PREFIX="${INTELLIFIRE_PREFIX:-/Users/Shared/intellifire-bridge}"
 LABEL="com.intellifire-bridge"
-PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
 SOURCE="$(cd "$(dirname "$0")" && pwd)"
+MODE="agent"
 
-echo "Installing intellifire-bridge into $PREFIX"
+for arg in "$@"; do
+  case "$arg" in
+    --daemon) MODE="daemon" ;;
+    --agent)  MODE="agent" ;;
+    *) echo "usage: $0 [--daemon|--agent]" >&2; exit 2 ;;
+  esac
+done
+
+# When invoked under sudo, install for the human who typed it, not for root.
+RUN_USER="${SUDO_USER:-$(id -un)}"
+
+echo "Installing intellifire-bridge into $PREFIX ($MODE, running as $RUN_USER)"
 
 mkdir -p "$PREFIX/log"
 rsync -a --delete "$SOURCE/bin" "$SOURCE/lib" "$PREFIX/"
@@ -39,12 +55,32 @@ EOF
   fi
 fi
 
-mkdir -p "$(dirname "$PLIST")"
-cp "$SOURCE/launchd/$LABEL.plist" "$PLIST"
+# The daemon runs as RUN_USER, so everything it reads must belong to RUN_USER —
+# including credentials.json if a root-run installer just created it.
+chown -R "$RUN_USER" "$PREFIX" 2>/dev/null || true
 
-# bootout is expected to fail the first time; that is not an error.
-launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
-launchctl bootstrap "gui/$(id -u)" "$PLIST"
+if [ "$MODE" = "daemon" ]; then
+  PLIST="/Library/LaunchDaemons/$LABEL.plist"
+  TMP_PLIST="$(mktemp -t "$LABEL")"
+  sed "s/__RUN_USER__/$RUN_USER/" \
+    "$SOURCE/launchd/$LABEL.daemon.plist" > "$TMP_PLIST"
+
+  # bootout is expected to fail the first time; that is not an error.
+  sudo launchctl bootout "system/$LABEL" 2>/dev/null || true
+  sudo cp "$TMP_PLIST" "$PLIST"
+  sudo chown root:wheel "$PLIST"
+  sudo chmod 644 "$PLIST"
+  rm -f "$TMP_PLIST"
+  sudo launchctl bootstrap system "$PLIST"
+else
+  PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
+  mkdir -p "$(dirname "$PLIST")"
+  cp "$SOURCE/launchd/$LABEL.plist" "$PLIST"
+
+  # bootout is expected to fail the first time; that is not an error.
+  launchctl bootout "gui/$(id -u)/$LABEL" 2>/dev/null || true
+  launchctl bootstrap "gui/$(id -u)" "$PLIST"
+fi
 
 echo "Waiting for the bridge to come up..."
 for _ in $(seq 1 15); do
@@ -57,6 +93,8 @@ for _ in $(seq 1 15); do
     echo "Status:"
     curl -fsS "http://127.0.0.1:4568/status"
     echo
+    echo
+    echo "launchd job: $PLIST"
     exit 0
   fi
   sleep 1

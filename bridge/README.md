@@ -25,10 +25,25 @@ Status polling (`GET /poll`) needs no authentication, so the bridge will start a
 On the Savant host:
 
 ```sh
-./install.sh
+./install.sh            # per-user LaunchAgent — starts at GUI login
+./install.sh --daemon   # system LaunchDaemon — starts at boot, asks for sudo
 ```
 
-That copies the code to `/Users/Shared/intellifire-bridge`, offers to fetch your credentials, installs the `launchd` agent, and waits for the bridge to answer.
+That copies the code to `/Users/Shared/intellifire-bridge`, offers to fetch your credentials, installs the `launchd` job, and waits for the bridge to answer.
+
+Use `--daemon` on a host that has to come back on its own after an unattended reboot: the agent only starts once someone (or auto-login) opens a GUI session, the daemon starts at boot. `--daemon` needs sudo to write `/Library/LaunchDaemons/com.intellifire-bridge.plist`, but the plist carries a `UserName` key so the bridge itself still runs as the installing user — port 4568 needs no privilege and the bridge never shells out.
+
+Managing the job afterwards:
+
+```sh
+# agent
+launchctl bootout  "gui/$(id -u)/com.intellifire-bridge"
+launchctl bootstrap "gui/$(id -u)" ~/Library/LaunchAgents/com.intellifire-bridge.plist
+
+# daemon
+sudo launchctl bootout  system/com.intellifire-bridge
+sudo launchctl bootstrap system /Library/LaunchDaemons/com.intellifire-bridge.plist
+```
 
 To fetch credentials separately:
 

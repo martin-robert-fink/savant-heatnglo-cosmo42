@@ -29,14 +29,15 @@ Copy the `bridge/` directory to the Savant host, then:
 
 ```sh
 cd bridge
-./install.sh
+./install.sh            # LaunchAgent — starts at GUI login
+./install.sh --daemon   # LaunchDaemon — starts at boot (recommended on a host)
 ```
 
 The installer:
 
 1. copies the code to `/Users/Shared/intellifire-bridge`
 2. offers to run `bin/intellifire-credentials`, which logs into `iftapi.net`, lists the fireplaces on your account, and writes the selected one's API key + user id to `credentials.json` (mode `0600`)
-3. installs and bootstraps the `launchd` agent `com.intellifire-bridge`
+3. installs and bootstraps the `launchd` job `com.intellifire-bridge` — a per-user agent, or with `--daemon` a system daemon in `/Library/LaunchDaemons` that still runs as the installing user
 4. waits for the bridge to answer, then prints its health and status
 
 ### Verify before touching Blueprint
@@ -187,7 +188,8 @@ tail -n 50 /Users/Shared/intellifire-bridge/log/intellifire-bridge.log
 The log is JSON lines. Look for `poll_failed` (bridge cannot reach the fireplace) versus no `started` line at all (bridge is not running).
 
 ```sh
-launchctl print "gui/$(id -u)/com.intellifire-bridge" | head -20
+launchctl print "gui/$(id -u)/com.intellifire-bridge" | head -20   # agent install
+sudo launchctl print system/com.intellifire-bridge | head -20      # --daemon install
 ```
 
 **`/status` shows `"online": 0`**
