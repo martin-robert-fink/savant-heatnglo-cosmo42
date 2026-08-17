@@ -61,13 +61,26 @@ If `/beep` chirps, everything downstream is a Savant configuration problem, not 
 
 ---
 
-## 3. Import the profile into Blueprint
+## 3. Add the profile to a Blueprint custom library
 
-1. RacePoint Blueprint → **Preferences → Libraries**
-2. **+** to add a User Library (or select your existing custom library)
-3. With the library selected, **Import…** and choose `componentProfiles/heat_n_glo_cosmo_42.xml`
-4. Drop `images/heat_n_glo_cosmo_42.png` into the library's `images/` folder — the basename must match the XML filename — and restart Blueprint to pick it up
-5. Optionally place this guide in the library's `documentation/` folder for in-Inspector access
+A Blueprint custom library is not a file you import — it is a **folder on disk** holding three subfolders:
+
+```
+MyCustomLibrary/
+├── componentProfiles/     the profile XMLs
+├── images/                one image per profile, matching basename
+└── documentation/         optional, surfaced in the Inspector
+```
+
+This repository is laid out the same way, so adding the profile is a copy:
+
+1. RacePoint Blueprint → **Settings → Libraries** (older builds: **Preferences → Libraries**). Either note the path of a custom library you already have, or **+** to add a new folder — Blueprint creates the three subfolders inside it.
+2. Copy `componentProfiles/heat_n_glo_cosmo_42.xml` into the library's `componentProfiles/`.
+3. Copy `images/heat_n_glo_cosmo_42.png` into the library's `images/`. The basename **must** match the XML, or the component shows a placeholder icon.
+4. Optionally copy this guide into `documentation/`.
+5. **Restart Blueprint** — libraries are scanned at launch, so a running instance will not see the new profile.
+
+One library can hold any number of profiles, so an existing custom library is the path of least resistance — no new registration needed.
 
 ---
 
