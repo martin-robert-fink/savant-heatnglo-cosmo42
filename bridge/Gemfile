@@ -1,0 +1,10 @@
+source 'https://rubygems.org'
+
+# webrick left the standard library in Ruby 3.0; on the Savant host's system
+# Ruby it is still bundled, so the bridge runs with no gems installed.
+gem 'webrick', '~> 1.8'
+
+group :development, :test do
+  gem 'minitest', '~> 5.0'
+  gem 'rake', '~> 13.0'
+end

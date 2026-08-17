@@ -1,0 +1,43 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN"
+  "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+  <key>Label</key>
+  <string>com.intellifire-bridge</string>
+
+  <key>ProgramArguments</key>
+  <array>
+    <string>/usr/bin/ruby</string>
+    <string>/Users/Shared/intellifire-bridge/bin/intellifire-bridge</string>
+  </array>
+
+  <!-- The fireplace IP, API key and user id live in credentials.json (mode
+       0600) rather than here, so this file stays safe to copy around. -->
+  <key>EnvironmentVariables</key>
+  <dict>
+    <key>INTELLIFIRE_CREDENTIALS</key>
+    <string>/Users/Shared/intellifire-bridge/credentials.json</string>
+    <key>INTELLIFIRE_BRIDGE_PORT</key>
+    <string>4568</string>
+    <key>INTELLIFIRE_BRIDGE_BIND</key>
+    <string>0.0.0.0</string>
+    <key>INTELLIFIRE_POLL_INTERVAL</key>
+    <string>5.0</string>
+    <key>INTELLIFIRE_LOG_LEVEL</key>
+    <string>info</string>
+  </dict>
+
+  <key>RunAtLoad</key>
+  <true/>
+  <key>KeepAlive</key>
+  <true/>
+  <key>ThrottleInterval</key>
+  <integer>10</integer>
+
+  <key>StandardOutPath</key>
+  <string>/Users/Shared/intellifire-bridge/log/intellifire-bridge.log</string>
+  <key>StandardErrorPath</key>
+  <string>/Users/Shared/intellifire-bridge/log/intellifire-bridge.err.log</string>
+</dict>
+</plist>

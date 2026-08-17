@@ -1,0 +1,9 @@
+# Never commit fireplace credentials — this file holds the API key and user id.
+credentials.json
+
+.DS_Store
+*.swp
+
+bridge/log/
+bridge/.bundle/
+bridge/Gemfile.lock

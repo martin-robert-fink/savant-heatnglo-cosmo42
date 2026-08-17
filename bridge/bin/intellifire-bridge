@@ -1,0 +1,21 @@
+#!/usr/bin/env ruby
+$LOAD_PATH.unshift File.expand_path('../lib', __dir__)
+
+require 'intellifire_bridge'
+require 'intellifire_bridge/server'
+
+config = IntellifireBridge::Config.from_env
+
+missing = config.missing_for_polling
+unless missing.empty?
+  warn "intellifire-bridge: cannot start, missing #{missing.join(', ')}"
+  warn 'Set INTELLIFIRE_IP, or point INTELLIFIRE_CREDENTIALS at a credentials.json.'
+  exit 1
+end
+
+unless config.can_control?
+  warn "intellifire-bridge: starting in read-only mode, missing #{config.missing_for_control.join(', ')}"
+  warn 'Run bin/intellifire-credentials to fetch the API key and user id.'
+end
+
+IntellifireBridge::Server.new(config).start

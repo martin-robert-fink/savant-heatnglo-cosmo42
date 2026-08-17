@@ -1,0 +1,847 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<component xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+    xsi:noNamespaceSchemaLocation="racepoint_component_profile.xsd"
+    manufacturer="Heat &amp; Glo"
+    model="Cosmo 42"
+    alias="Heat &amp; Glo Cosmo 32,Heat &amp; Glo Cosmo 36,Heat and Glo Cosmo,IntelliFire,IntelliFire Touch,IFT-WFM,Quadra-Fire IntelliFire,Vermont Castings IntelliFire,Majestic IntelliFire,Hearth and Home IntelliFire"
+    device_class="Trigger_environment_device"
+    minimum_component_engine_version="11.0"
+    rpm_xml_version="0.1">
+
+    <notes>
+        Heat &amp; Glo Cosmo 42 gas fireplace with the IntelliFire Wi-Fi module (IFT-WFM).
+
+        IMPORTANT - THIS PROFILE REQUIRES A COMPANION BRIDGE
+        ====================================================
+        This profile does NOT talk to the fireplace directly. It talks to the
+        "intellifire-bridge" helper that ships alongside it.
+
+        The reason is authentication. Every command the IntelliFire module accepts on
+        its local API must be signed with a two-round SHA-256 challenge/response:
+
+            payload  = "post:command=&lt;cmd&gt;&amp;value=&lt;val&gt;"
+            inner    = SHA256(api_key_bytes + challenge_bytes + payload_bytes)
+            response = SHA256(api_key_bytes + inner)
+
+        A Savant component profile can append CRC-16, XOR, Fletcher and similar
+        checksums, but it has no SHA-256 primitive, so it cannot sign these commands.
+        The bridge (stdlib-only Ruby, runs on the Savant host under launchd) does the
+        signing and exposes a plain HTTP interface this profile can drive.
+
+        Status polling alone (GET /poll on the fireplace) needs no authentication, so a
+        read-only profile would have been possible - but a fireplace you can watch and
+        not control is not worth having.
+
+        TESTED WITH:
+        ============
+        - Heat &amp; Glo Cosmo 42 with IntelliFire Wi-Fi module (IFT-WFM)
+        - intellifire-bridge 0.1.0
+        - Savant da Vinci 11.2.1
+
+        SETUP REQUIREMENTS:
+        ===================
+        1. The IntelliFire Wi-Fi module must be installed, joined to your 2.4 GHz
+           network, and working in the IntelliFire phone app.
+
+        2. Give the fireplace a static IP (DHCP reservation).
+
+        3. Install intellifire-bridge on the Savant host and run
+           "bin/intellifire-credentials" once to fetch the API key and user id from
+           iftapi.net. That is the only time the cloud is involved; everything after
+           it is local.
+
+        4. Set this component's IP address in Blueprint to the host running the bridge
+           (the Savant host itself if you followed the default install), and leave the
+           port at 4568 unless you changed INTELLIFIRE_BRIDGE_PORT.
+
+        5. Generate Services. The Fireplace appears as a Trigger Controlled Device with
+           On/Off. Flame height, fan, thermostat, timer and the rest are custom actions
+           you can place on a UI screen or drive from workflows/scenes.
+
+        6. OPTIONAL - for slider control, add Lighting entities in the data table:
+              Address1 = 1  -> Flame Height  (0-100 slider maps to flame level 0-4)
+              Address1 = 2  -> Accent Light  (0-100 slider maps to light level 0-3)
+              Address1 = 3  -> Blower        (0-100 slider maps to fan speed 0-4)
+
+           SAFETY NOTE: entity 1 puts the flame on a Lighting service, which means
+           whole-house lighting scenes and "turn on the lights" voice commands can
+           ignite the appliance. Add it only if you want that. Entities 2 and 3 control
+           accessories and are harmless.
+
+        ARCHITECTURE NOTES:
+        ===================
+        Every bridge endpoint - polls and commands alike - answers with the same flat
+        JSON status document, so this profile needs exactly one parser (the
+        FireplaceStatus status_message) rather than per-command response blocks.
+
+        The document is deliberately flat: scalars only, no nested objects, no arrays,
+        no JSON booleans. Flags arrive as 0/1 integers and the error list arrives
+        pre-collapsed into a string, because Savant's root_object JSON parser addresses
+        values by simple path.
+
+        The bridge also holds an optimistic overlay for a few seconds after a command,
+        so the status fetched 1.5 s later already reflects the new value even though
+        the appliance's own /poll has not caught up.
+
+        Bridge endpoints used here:
+          GET /status              - full status document
+          GET /power/on|off        - ignite / extinguish
+          GET /flame/0..4|up|down  - flame height
+          GET /fan/0..4|up|down    - blower speed
+          GET /light/0..3|up|down  - accent light
+          GET /dimmer/&lt;1|2|3&gt;/&lt;0-100&gt; - percent control, shape of Savant's DimmerSet
+          GET /thermostat/f/&lt;degF&gt; - thermostat setpoint (also c/, raw/, up, down, off)
+          GET /timer/&lt;minutes&gt;     - auto-off timer, 0-180 (also /timer/off)
+          GET /pilot/on|off        - standing pilot
+          GET /beep, /soft_reset   - locate chirp, clear soft lockout
+
+        ====================== Change Log ==================
+        Version: 0.1  Initial release. Power, flame height, blower, accent light,
+                      thermostat, timer, pilot, diagnostics and full status feedback
+                      via the intellifire-bridge helper.
+    </notes>
+
+    <!-- ============================================================
+         CONTROL INTERFACE
+         Native HTTP to the bridge. Unlike the Tailwind iQ3 profile, no raw-TCP
+         request construction is needed here: the bridge speaks plain GET, so
+         Savant's http protocol handles it directly.
+         ============================================================ -->
+    <control_interfaces preferred="ip">
+        <ip name_on_component="Ethernet" port="4568" protocol="http" response_time_length_ms="5000">
+            <response_codes>
+                <rspcode type="character" status="success">200</rspcode>
+            </response_codes>
+        </ip>
+    </control_interfaces>
+
+    <media_interfaces>
+        <data name_on_component="Ethernet">
+            <combined_media>
+                <data_media type="ethernet"/>
+                <control port="4568"/>
+            </combined_media>
+        </data>
+        <internal name_on_component="Fireplace">
+            <environmental_media/>
+            <resource resource_type="ENV_GENERALTRIGGERCONTROLLEDDEVICE_SOURCE"/>
+            <resource resource_type="ENV_LIGHTINGCONTROLLER_SOURCE"/>
+        </internal>
+    </media_interfaces>
+
+    <!-- ============================================================
+         STATE VARIABLES
+         Everything here is fed from the bridge's status document. Nothing is
+         user_editable: the bridge address comes from the component's IP address
+         in Blueprint, and the fireplace credentials live in the bridge.
+
+         DimmerLevel is the dynamic variable Savant's lighting slider reads;
+         DimmerLevel_1/_2/_3 correspond to flame, accent light and blower.
+         ============================================================ -->
+    <state_variable_list>
+        <state_variable name="CurrentPowerStatus"
+                        owning_logical_component="Fireplace"
+                        state_center_binding="CurrentPowerStatus"
+                        state_center_type="string"
+                        note="ON when the burner is lit">OFF</state_variable>
+
+        <state_variable name="IsFireplaceOn" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="1 when the burner is lit">0</state_variable>
+
+        <state_variable name="FlameHeight" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="Flame height 0-4">0</state_variable>
+        <state_variable name="FlameHeightPercent" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="Flame height as 0-100">0</state_variable>
+
+        <state_variable name="BlowerSpeed" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="Blower speed 0-4">0</state_variable>
+        <state_variable name="BlowerSpeedPercent" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="Blower speed as 0-100">0</state_variable>
+
+        <state_variable name="AccentLightLevel" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="Accent light 0-3">0</state_variable>
+        <state_variable name="AccentLightPercent" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="Accent light as 0-100">0</state_variable>
+
+        <state_variable name="PilotOn" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="1 when the standing pilot is lit">0</state_variable>
+        <state_variable name="IsHot" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="1 while the appliance is still hot">0</state_variable>
+
+        <state_variable name="ThermostatEnabled" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="1 when thermostat mode is active">0</state_variable>
+        <state_variable name="ThermostatSetPointC" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="Setpoint in whole degrees C">0</state_variable>
+        <state_variable name="ThermostatSetPointF" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="Setpoint in whole degrees F">32</state_variable>
+        <state_variable name="CurrentTemperatureC" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="Room temperature at the appliance, C">0</state_variable>
+        <state_variable name="CurrentTemperatureF" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="Room temperature at the appliance, F">32</state_variable>
+
+        <state_variable name="TimerEnabled" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="1 when the auto-off timer is running">0</state_variable>
+        <state_variable name="TimeRemainingMinutes" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="Minutes left on the auto-off timer">0</state_variable>
+
+        <state_variable name="HasBlower" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="1 if this unit reports a blower">0</state_variable>
+        <state_variable name="HasAccentLight" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="1 if this unit reports an accent light">0</state_variable>
+        <state_variable name="HasThermostat" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="1 if this unit reports a thermostat">0</state_variable>
+
+        <state_variable name="ErrorCount" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="Number of active appliance errors">0</state_variable>
+        <state_variable name="ErrorText" owning_logical_component="Fireplace"
+                        state_center_type="string" note="Human-readable active errors">None</state_variable>
+
+        <state_variable name="FireplaceOnline" owning_logical_component="Fireplace"
+                        state_center_type="integer" note="1 when the bridge last reached the fireplace">0</state_variable>
+        <state_variable name="FireplaceSerial" owning_logical_component="Fireplace"
+                        state_center_type="string" note="Appliance serial number"></state_variable>
+        <state_variable name="FirmwareVersion" owning_logical_component="Fireplace"
+                        state_center_type="string" note="Wi-Fi module firmware version"></state_variable>
+
+        <dynamic_state_variable name="DimmerLevel"
+                                owning_logical_component="Fireplace"
+                                state_center_binding="DimmerLevel"
+                                state_center_type="integer">0</dynamic_state_variable>
+    </state_variable_list>
+
+    <logical_component logical_component_name="Fireplace">
+        <implementation>
+            <internal name_on_component="Fireplace"/>
+        </implementation>
+
+        <!-- ============================================================
+             STATUS PARSING
+             One parser for every response the bridge sends, because every
+             endpoint returns the same status document. matches_required
+             "at_least_one" means a response that lacks these paths (an error
+             body, say) simply does not update anything.
+             ============================================================ -->
+        <status_messages>
+            <status_message name="FireplaceStatus">
+                <root_object name="none" matches_required="at_least_one" format="json">
+                    <values path="/none/power_status" matches_required="at_least_one">
+                        <update state="CurrentPowerStatus" type="string"/>
+                    </values>
+                    <values path="/none/power" matches_required="at_least_one">
+                        <update state="IsFireplaceOn" type="integer"/>
+                    </values>
+
+                    <values path="/none/flame_height" matches_required="at_least_one">
+                        <update state="FlameHeight" type="integer"/>
+                    </values>
+                    <values path="/none/flame_percent" matches_required="at_least_one">
+                        <update state="FlameHeightPercent" type="integer"/>
+                        <update state="DimmerLevel_1" type="integer"/>
+                    </values>
+
+                    <values path="/none/light_level" matches_required="at_least_one">
+                        <update state="AccentLightLevel" type="integer"/>
+                    </values>
+                    <values path="/none/light_percent" matches_required="at_least_one">
+                        <update state="AccentLightPercent" type="integer"/>
+                        <update state="DimmerLevel_2" type="integer"/>
+                    </values>
+
+                    <values path="/none/fan_speed" matches_required="at_least_one">
+                        <update state="BlowerSpeed" type="integer"/>
+                    </values>
+                    <values path="/none/fan_percent" matches_required="at_least_one">
+                        <update state="BlowerSpeedPercent" type="integer"/>
+                        <update state="DimmerLevel_3" type="integer"/>
+                    </values>
+
+                    <values path="/none/pilot" matches_required="at_least_one">
+                        <update state="PilotOn" type="integer"/>
+                    </values>
+                    <values path="/none/hot" matches_required="at_least_one">
+                        <update state="IsHot" type="integer"/>
+                    </values>
+
+                    <values path="/none/thermostat" matches_required="at_least_one">
+                        <update state="ThermostatEnabled" type="integer"/>
+                    </values>
+                    <values path="/none/setpoint_c" matches_required="at_least_one">
+                        <update state="ThermostatSetPointC" type="integer"/>
+                    </values>
+                    <values path="/none/setpoint_f" matches_required="at_least_one">
+                        <update state="ThermostatSetPointF" type="integer"/>
+                    </values>
+                    <values path="/none/temperature_c" matches_required="at_least_one">
+                        <update state="CurrentTemperatureC" type="integer"/>
+                    </values>
+                    <values path="/none/temperature_f" matches_required="at_least_one">
+                        <update state="CurrentTemperatureF" type="integer"/>
+                    </values>
+
+                    <values path="/none/timer" matches_required="at_least_one">
+                        <update state="TimerEnabled" type="integer"/>
+                    </values>
+                    <values path="/none/time_remaining_min" matches_required="at_least_one">
+                        <update state="TimeRemainingMinutes" type="integer"/>
+                    </values>
+
+                    <values path="/none/has_fan" matches_required="at_least_one">
+                        <update state="HasBlower" type="integer"/>
+                    </values>
+                    <values path="/none/has_light" matches_required="at_least_one">
+                        <update state="HasAccentLight" type="integer"/>
+                    </values>
+                    <values path="/none/has_thermostat" matches_required="at_least_one">
+                        <update state="HasThermostat" type="integer"/>
+                    </values>
+
+                    <values path="/none/error_count" matches_required="at_least_one">
+                        <update state="ErrorCount" type="integer"/>
+                    </values>
+                    <values path="/none/error_text" matches_required="at_least_one">
+                        <update state="ErrorText" type="string"/>
+                    </values>
+
+                    <values path="/none/online" matches_required="at_least_one">
+                        <update state="FireplaceOnline" type="integer"/>
+                    </values>
+                    <values path="/none/serial" matches_required="at_least_one">
+                        <update state="FireplaceSerial" type="string"/>
+                    </values>
+                    <values path="/none/firmware" matches_required="at_least_one">
+                        <update state="FirmwareVersion" type="string"/>
+                    </values>
+                </root_object>
+            </status_message>
+        </status_messages>
+
+        <!-- ============================================================
+             POWER
+             These are what the Trigger Controlled Device service drives, and
+             what appears as the fireplace's On/Off tile in the Pro App.
+             Each one updates state optimistically, then confirms with a status
+             fetch once the appliance has had time to act on it.
+             ============================================================ -->
+        <universal_component_actions>
+            <action name="PowerOn">
+                <update_state_variable name="CurrentPowerStatus" update_type="set"
+                                       update_source="constant">ON</update_state_variable>
+                <update_state_variable name="IsFireplaceOn" update_type="set"
+                                       update_source="constant">1</update_state_variable>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">power/on</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <action name="PowerOff">
+                <update_state_variable name="CurrentPowerStatus" update_type="set"
+                                       update_source="constant">OFF</update_state_variable>
+                <update_state_variable name="IsFireplaceOn" update_type="set"
+                                       update_source="constant">0</update_state_variable>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">power/off</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+        </universal_component_actions>
+
+        <!-- ============================================================
+             LIGHTING RESOURCE - OPTIONAL SLIDER ENTITIES
+             Savant has no fireplace service with a level slider, so the three
+             continuously-variable functions borrow the Lighting service to get
+             one. Address1 picks the channel and is passed straight through to
+             the bridge, which maps 0-100 onto the device's own step count:
+
+               Address1 = 1  Flame Height  (0-4)
+               Address1 = 2  Accent Light  (0-3)
+               Address1 = 3  Blower        (0-4)
+
+             See the safety note at the top of this file before adding entity 1.
+             ============================================================ -->
+        <resource_component_actions resource_type="ENV_LIGHTINGCONTROLLER_SOURCE">
+
+            <action name="DimmerSet">
+                <action_argument name="Address1" note="1 = Flame Height, 2 = Accent Light, 3 = Blower"/>
+                <action_argument name="Address2" note="not used"/>
+                <action_argument name="Address3" note="not used"/>
+                <action_argument name="Address4" note="not used"/>
+                <action_argument name="Address5" note="not used"/>
+                <action_argument name="Address6" note="not used"/>
+                <action_argument name="DimmerLevel" note="Target level (0 - 100)"/>
+
+                <update_state_variable name="DimmerLevel_*" update_type="set"
+                                       update_source="action_argument"
+                                       wildcard_source_name="Address1"
+                                       wildcard_source="action_argument"
+                                       wildcard_format="%d">DimmerLevel</update_state_variable>
+
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">dimmer/</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" isHttpBody="false" action_argument="Address1"/>
+                            <parameter parameter_data_type="character" isHttpBody="false">/</parameter>
+                            <parameter parameter_data_type="character" isHttpBody="false" action_argument="DimmerLevel"/>
+                        </parameter_list>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <action name="SwitchOn">
+                <action_argument name="Address1" note="1 = Flame Height, 2 = Accent Light, 3 = Blower"/>
+                <action_argument name="Address2" note="not used"/>
+                <action_argument name="Address3" note="not used"/>
+                <action_argument name="Address4" note="not used"/>
+                <action_argument name="Address5" note="not used"/>
+                <action_argument name="Address6" note="not used"/>
+
+                <update_state_variable name="DimmerLevel_*" update_type="set"
+                                       update_source="constant"
+                                       wildcard_source_name="Address1"
+                                       wildcard_source="action_argument"
+                                       wildcard_format="%d">100</update_state_variable>
+
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">dimmer/</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" isHttpBody="false" action_argument="Address1"/>
+                            <parameter parameter_data_type="character" isHttpBody="false">/100</parameter>
+                        </parameter_list>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <action name="SwitchOff">
+                <action_argument name="Address1" note="1 = Flame Height, 2 = Accent Light, 3 = Blower"/>
+                <action_argument name="Address2" note="not used"/>
+                <action_argument name="Address3" note="not used"/>
+                <action_argument name="Address4" note="not used"/>
+                <action_argument name="Address5" note="not used"/>
+                <action_argument name="Address6" note="not used"/>
+
+                <update_state_variable name="DimmerLevel_*" update_type="set"
+                                       update_source="constant"
+                                       wildcard_source_name="Address1"
+                                       wildcard_source="action_argument"
+                                       wildcard_format="%d">0</update_state_variable>
+
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">dimmer/</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" isHttpBody="false" action_argument="Address1"/>
+                            <parameter parameter_data_type="character" isHttpBody="false">/0</parameter>
+                        </parameter_list>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <entity name="Level" address_components="1">
+                <slider_representation>
+                    <press_action name="DimmerSet"/>
+                    <valueSource name="DimmerLevel">
+                        <unique_identifier name="ChannelID" address_component="1"/>
+                    </valueSource>
+                </slider_representation>
+                <toggle_button_representation>
+                    <release_action name="SwitchOn"/>
+                    <toggle_release_action name="SwitchOff"/>
+                    <toggleOnUsingState name="DimmerLevel">
+                        <unique_identifier name="ChannelID" address_component="1"/>
+                    </toggleOnUsingState>
+                </toggle_button_representation>
+            </entity>
+
+        </resource_component_actions>
+
+        <!-- ============================================================
+             CUSTOM ACTIONS
+             Everything the Trigger Controlled Device service does not model.
+             Place these on a UI screen, bind them to keypad buttons, or call
+             them from scenes and workflows.
+             ============================================================ -->
+        <custom_component_actions>
+
+            <!-- ====== STATUS POLLING ======
+                 Runs once on connect and every 5 s thereafter. Also fired 1.5 s
+                 after each command so the UI confirms quickly. -->
+            <action name="GetFireplaceStatus">
+                <command_interface interface="ip">
+                    <command response_required="yes">
+                        <command_string type="character" http_request_type="GET">status</command_string>
+                        <delay ms_delay="100"/>
+                    </command>
+                </command_interface>
+                <execute_on_schedule period_ms="0"/>
+                <execute_on_schedule period_ms="5000"/>
+            </action>
+
+            <!-- ====== FLAME HEIGHT ====== -->
+            <action name="FlameOff">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">flame/0</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="FlameLow">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">flame/1</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="FlameMediumLow">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">flame/2</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="FlameMediumHigh">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">flame/3</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="FlameHigh">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">flame/4</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <!-- Relative steps are resolved by the bridge against the freshest
+                 known level, including any command still in flight. -->
+            <action name="FlameUp">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">flame/up</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="FlameDown">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">flame/down</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="SetFlameHeight">
+                <action_argument name="FlameHeight" note="Flame height 0 (off) to 4 (high)"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">flame/</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" isHttpBody="false" action_argument="FlameHeight"/>
+                        </parameter_list>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <!-- ====== BLOWER ====== -->
+            <action name="BlowerOff">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">fan/0</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="BlowerLow">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">fan/1</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="BlowerMedium">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">fan/2</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="BlowerHigh">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">fan/4</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="BlowerUp">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">fan/up</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="BlowerDown">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">fan/down</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="SetBlowerSpeed">
+                <action_argument name="BlowerSpeed" note="Blower speed 0 (off) to 4 (high)"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">fan/</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" isHttpBody="false" action_argument="BlowerSpeed"/>
+                        </parameter_list>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <!-- ====== ACCENT LIGHT ====== -->
+            <action name="AccentLightOff">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">light/0</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="AccentLightLow">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">light/1</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="AccentLightMedium">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">light/2</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="AccentLightHigh">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">light/3</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="SetAccentLightLevel">
+                <action_argument name="AccentLightLevel" note="Accent light 0 (off) to 3 (bright)"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">light/</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" isHttpBody="false" action_argument="AccentLightLevel"/>
+                        </parameter_list>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <!-- ====== THERMOSTAT ======
+                 The appliance stores its setpoint in hundredths of a degree
+                 Celsius; the bridge converts, so these take whole degrees. -->
+            <action name="ThermostatOff">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">thermostat/off</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="SetThermostatF">
+                <action_argument name="Temperature" note="Setpoint in whole degrees Fahrenheit (33 - 98)"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">thermostat/f/</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" isHttpBody="false" action_argument="Temperature"/>
+                        </parameter_list>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="SetThermostatC">
+                <action_argument name="Temperature" note="Setpoint in whole degrees Celsius (0 - 37)"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">thermostat/c/</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" isHttpBody="false" action_argument="Temperature"/>
+                        </parameter_list>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="ThermostatUp">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">thermostat/up</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="ThermostatDown">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">thermostat/down</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <!-- ====== AUTO-OFF TIMER ====== -->
+            <action name="TimerOff">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">timer/off</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="SetTimerMinutes">
+                <action_argument name="Minutes" note="Auto-off timer in minutes (0 - 180)"/>
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">timer/</command_string>
+                        <parameter_list>
+                            <parameter parameter_data_type="character" isHttpBody="false" action_argument="Minutes"/>
+                        </parameter_list>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="Timer30Minutes">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">timer/30</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="Timer60Minutes">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">timer/60</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="Timer120Minutes">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">timer/120</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+            <!-- ====== PILOT AND DIAGNOSTICS ======
+                 Leaving the standing pilot on lets the appliance relight
+                 instantly but burns gas continuously; off is the efficient
+                 setting at the cost of a slower start. -->
+            <action name="PilotOn">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">pilot/on</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <action name="PilotOff">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">pilot/off</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+            <!-- Chirps the appliance, for confirming you are addressing the
+                 right fireplace during commissioning. -->
+            <action name="Beep">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">beep</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+            </action>
+            <!-- Clears a soft lockout after a failed ignition attempt. -->
+            <action name="SoftReset">
+                <command_interface interface="ip">
+                    <command response_required="no">
+                        <command_string type="character" http_request_type="GET">soft_reset</command_string>
+                        <delay ms_delay="200"/>
+                    </command>
+                </command_interface>
+                <execute_action_after_delay ms_delay="3000" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
+            </action>
+
+        </custom_component_actions>
+
+    </logical_component>
+</component>
