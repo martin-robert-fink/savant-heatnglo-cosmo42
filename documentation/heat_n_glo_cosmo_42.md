@@ -167,6 +167,63 @@ Only add entities for accessories your appliance actually has. `curl http://127.
 
 ---
 
+## 6a. A custom UI screen (recommended over the stock Climate tile)
+
+The stock Climate tile has two flaws for a fireplace, and neither can be fixed from the profile:
+
+- **A Cool button that cannot be removed.** In Blueprint's **HVAC Settings** table, `Cool` shows ticked *and greyed out* for this component. Savant's `Auto` means auto-**changeover**, which by definition implies a cool side, so declaring `SetHVACModeAuto` forces cooling capability on. (Drop Auto and use Heat as the thermostatic mode and it should release — at the cost of a mode.)
+- **A Fan On/Auto row** drawn by the Climate screen template even though the service declares no `SetFanMode*` requests at all.
+
+A custom screen sidesteps both: you place exactly the controls you want. Everything below is verified against a live system — states read back through `sclibridge`, and the request syntax accepted by the host.
+
+### Buttons
+
+Every HVAC request takes the entity's address, `ThermostatAddress = 1` and `ThermostatAddress2 = 1`:
+
+| Control | Service request | Highlight when |
+|---|---|---|
+| **Off** | `SetHVACModeOff` | `IsCurrentHVACModeOff_1_1` = 1 |
+| **On** | `SetHVACModeHeat` | `IsCurrentHVACModeHeat_1_1` = 1 |
+| **Auto** | `SetHVACModeAuto` | `IsCurrentHVACModeAuto_1_1` = 1 |
+| **Setpoint ▲** | `IncreaseHeatPointTemperature` | — |
+| **Setpoint ▼** | `DecreaseHeatPointTemperature` | — |
+| **Setpoint (absolute)** | `SetHeatPointTemperature`, arg `HeatPointTemperature` | — |
+
+The full request string, as accepted by the host:
+
+```
+servicerequest "Living Room" "Living Room Fireplace" "Living Room Fireplace" 1 \
+  SVC_ENV_HVAC SetHVACModeOff ThermostatAddress 1 ThermostatAddress2 1
+```
+
+Zone, component and service alias are all quoted because they contain spaces. Useful for testing a binding from a shell before wiring it to a button.
+
+### Readouts
+
+State names are `<Component>.<LogicalComponent>.<State>`, e.g. `Living Room Fireplace.Fireplace.CurrentTemperatureF`:
+
+| Shows | State | Note |
+|---|---|---|
+| Room temperature | `CurrentTemperatureF` | also as `ThermostatCurrentTemperature_1_1` |
+| Setpoint | `ThermostatCurrentHeatPoint_1_1` | `32` means the thermostat is off |
+| Mode | `CurrentHVACMode_1_1` | `Off`, `Heat` or `Auto` |
+| Burner | `IsFireplaceOn` | 1 when lit |
+| Flame | `FlameHeightPercent` / `DimmerLevel_1` | 0–100 |
+| Still hot | `IsHot` | 1 while cooling down — worth showing |
+| Faults | `ErrorText` | `None` when healthy |
+| Reachable | `FireplaceOnline` | 0 means the bridge lost the fireplace |
+
+### The flame control
+
+Two ways, and the choice is about safety, not looks:
+
+1. **Slider** — bind to the Lighting service's `DimmerSet` with `Address1 = 1` and the slider's value as `DimmerLevel`; read back `DimmerLevel_1`. You get a true 0–100 slider. The entity must exist in the Lighting data table (`Use` ticked), but you can leave `Show` clear so it never appears as its own tile under Lights. **It remains reachable by lighting scenes and "all lights off" regardless**, because the service exists.
+2. **Buttons** — `FlameOff`, `FlameLow`, `FlameMediumLow`, `FlameMediumHigh`, `FlameHigh` as custom component actions, or `FlameUp`/`FlameDown` for nudges. No Lighting service, so nothing in the lighting system can ever reach the burner. Five taps instead of a slider.
+
+Pick 2 unless you specifically want the slider feel.
+
+---
+
 ## 7. Custom actions reference
 
 All available on the fireplace's logical component.
