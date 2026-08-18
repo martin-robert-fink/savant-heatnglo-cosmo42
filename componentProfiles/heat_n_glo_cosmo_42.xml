@@ -543,12 +543,15 @@
                Heat   ignite and hold the setpoint
 
              Auto is deliberately NOT declared. In Savant it means
-             auto-changeover, which implies a cool side: declare it and
-             Blueprint marks the component cooling-capable and greys the Cool
-             checkbox on in HVAC Settings, so the Pro App draws a Cool button
-             that can never work. Heat already means "heat to the heat
-             setpoint", which is the whole behaviour a thermostatic fireplace
-             has.
+             auto-changeover, which implies a cool side this appliance does
+             not have, and Heat already means "heat to the heat setpoint" -
+             the whole behaviour a thermostatic fireplace has.
+
+             Note that dropping Auto does NOT remove the Cool button: the
+             HVAC Settings table still shows Cool ticked and greyed, and the
+             Pro App still draws Cool and a Fan row, even though this service
+             contains no cool or fan requests whatsoever. That is the Climate
+             screen's fixed template, not something the profile controls.
 
              To burn regardless of temperature, use the trigger service's
              On/Off tile — that is what it is for. Cool and the fan modes are

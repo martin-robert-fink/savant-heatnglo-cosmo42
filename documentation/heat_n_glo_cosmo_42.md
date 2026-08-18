@@ -134,7 +134,7 @@ Two modes, and what each does to the appliance:
 | **Off** | `GET /hvac/off` | Clears the setpoint, extinguishes |
 | **Heat** | `GET /hvac/heat` | Ignites and restores the setpoint — burns until the room reaches it |
 
-**Heat is the thermostatic mode**, not a plain on: it hands the fireplace to its own thermostat. To burn regardless of temperature, use the trigger service's On/Off tile. `Auto` is not declared — see §6a for why — and Cool never appears, because the appliance cannot cool. Fan modes and humidity are not modelled.
+**Heat is the thermostatic mode**, not a plain on: it hands the fireplace to its own thermostat. To burn regardless of temperature, use the trigger service's On/Off tile. `Auto` is not declared — see §6a, which also covers the Cool button and Fan row the app draws regardless, and which no profile change can remove.
 
 `/hvac/auto` still answers as an alias for `/hvac/heat`, so anything bound to it before this change keeps working.
 
@@ -179,7 +179,13 @@ Only add entities for accessories your appliance actually has. `curl http://127.
 | Burn regardless of temperature | **Trigger** tile → On/Off |
 | Flame height | **Lights** tile, if you add the Lighting entity — or custom-action buttons |
 
-That split is why `Auto` is not declared. Savant's `Auto` means auto-**changeover**, which implies a cool side: declare it and Blueprint marks the component cooling-capable and greys `Cool` **on** in the HVAC Settings table, so the app draws a Cool button that can never do anything. `Heat` already means "heat to the heat setpoint", so nothing is lost.
+`Auto` is not declared, because in Savant it means auto-**changeover**, which implies a cool side the appliance does not have. `Heat` already means "heat to the heat setpoint", so nothing is lost by omitting it.
+
+> ### The Cool button cannot be removed — tested
+>
+> In Blueprint's **HVAC Settings** table, `Cool` shows ticked *and greyed out* for this component. Removing `SetHVACModeAuto` from the profile **does not clear it** — verified on a live system. Neither does declaring no `SetHVACModeCool` request, which this profile has never done: the generated service genuinely contains no cool or fan requests at all, and the Pro App draws the buttons anyway.
+>
+> So `Cool`, and the `Fan On/Auto` row beside it, come from the Climate screen's fixed template rather than from anything the profile says. **No profile change will remove them.** Tapping them sends nothing, because there is no request behind them. Treat them as cosmetic.
 
 > **The fan row may not be removable.** The generated service declares no `SetFanMode*` requests at all — verified against the config — so if the Climate screen still draws Fan On/Auto, it is the app's fixed template and no profile change will affect it.
 
