@@ -67,11 +67,26 @@ if [ "$MODE" = "daemon" ]; then
 
   # bootout is expected to fail the first time; that is not an error.
   sudo launchctl bootout "system/$LABEL" 2>/dev/null || true
+
+  # bootout returns before the job is actually gone. Bootstrapping into that
+  # window fails with "Bootstrap failed: 5: Input/output error", so wait for
+  # the label to disappear first.
+  for _ in $(seq 1 10); do
+    sudo launchctl print "system/$LABEL" >/dev/null 2>&1 || break
+    sleep 1
+  done
+
   sudo cp "$TMP_PLIST" "$PLIST"
   sudo chown root:wheel "$PLIST"
   sudo chmod 644 "$PLIST"
   rm -f "$TMP_PLIST"
-  sudo launchctl bootstrap system "$PLIST"
+
+  # If the job outlived the wait, restart it in place instead: the code on
+  # disk is already refreshed, so a kickstart picks it up.
+  if ! sudo launchctl bootstrap system "$PLIST" 2>/dev/null; then
+    echo "Job still loaded; restarting it in place."
+    sudo launchctl kickstart -k "system/$LABEL"
+  fi
 else
   PLIST="$HOME/Library/LaunchAgents/$LABEL.plist"
   mkdir -p "$(dirname "$PLIST")"
