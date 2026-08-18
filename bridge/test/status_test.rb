@@ -92,20 +92,23 @@ class StatusTest < Minitest::Test
     assert_equal 21, status['setpoint_c']
   end
 
-  # The Climate tile has one mode where the appliance has two flags.
+  # The Climate tile has one mode where the appliance has two flags. Auto is
+  # not offered at all: in Savant it implies cooling.
   def test_hvac_mode_collapses_power_and_thermostat
     off = build('power' => 0, 'thermostat' => 0)
     assert_equal 'Off', off['hvac_mode']
-    assert_equal [1, 0, 0], off.values_at('hvac_mode_off', 'hvac_mode_heat', 'hvac_mode_auto')
+    assert_equal [1, 0], off.values_at('hvac_mode_off', 'hvac_mode_heat')
 
-    heat = build('power' => 1, 'thermostat' => 0)
-    assert_equal 'Heat', heat['hvac_mode']
-    assert_equal [0, 1, 0], heat.values_at('hvac_mode_off', 'hvac_mode_heat', 'hvac_mode_auto')
+    # Lit by hand from the trigger service, with no thermostat: still Heat, so
+    # the Climate tile agrees with the fire actually burning in the room.
+    manual = build('power' => 1, 'thermostat' => 0)
+    assert_equal 'Heat', manual['hvac_mode']
 
-    # Thermostat wins: burning under thermostat control is Auto, not Heat.
-    auto = build('power' => 1, 'thermostat' => 1)
-    assert_equal 'Auto', auto['hvac_mode']
-    assert_equal [0, 0, 1], auto.values_at('hvac_mode_off', 'hvac_mode_heat', 'hvac_mode_auto')
+    thermostatic = build('power' => 1, 'thermostat' => 1)
+    assert_equal 'Heat', thermostatic['hvac_mode']
+    assert_equal [0, 1], thermostatic.values_at('hvac_mode_off', 'hvac_mode_heat')
+
+    refute_includes off.keys, 'hvac_mode_auto'
   end
 
   # Before the first successful poll the profile still needs every path to

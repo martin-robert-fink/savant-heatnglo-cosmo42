@@ -129,23 +129,26 @@ class RouterTest < Minitest::Test
     assert_equal %w[power].push(0), @client.sent.last
 
     @client.sent.clear
-    get('/hvac/heat') # burn now, no thermostat
-    assert_equal ['thermostat_setpoint', 0], @client.sent[-2]
-    assert_equal %w[power].push(1), @client.sent.last
-
-    @client.sent.clear
-    get('/hvac/auto') # burn to the setpoint the appliance already holds
+    get('/hvac/heat') # ignite and hold the setpoint already on the appliance
     assert_equal %w[power].push(1), @client.sent[-2]
     assert_equal ['thermostat_setpoint', 2200], @client.sent.last
   end
 
-  # Leaving Auto zeroes the setpoint on the appliance, so the bridge keeps a
-  # copy. Coming back must restore the chosen temperature, not a default.
-  def test_auto_restores_the_setpoint_that_heat_mode_cleared
-    get('/hvac/heat') # fixture setpoint 2200 == 72 F, now zeroed
+  # Savant's Auto implies cooling, so the profile no longer sends it — but any
+  # button bound to it before the change must keep working.
+  def test_auto_is_an_alias_for_heat
+    get('/hvac/auto')
+    assert_equal %w[power].push(1), @client.sent[-2]
+    assert_equal ['thermostat_setpoint', 2200], @client.sent.last
+  end
+
+  # Off zeroes the setpoint on the appliance, so the bridge keeps a copy.
+  # Returning to Heat must restore the chosen temperature, not a default.
+  def test_heat_restores_the_setpoint_that_off_cleared
+    get('/hvac/off') # fixture setpoint 2200 == 72 F, now zeroed
     @client.sent.clear
 
-    get('/hvac/auto')
+    get('/hvac/heat')
     assert_equal ['thermostat_setpoint', 2200], @client.sent.last
   end
 

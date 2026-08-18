@@ -153,14 +153,19 @@ module IntellifireBridge
       send_simple('thermostat_setpoint', raw)
     end
 
-    # /hvac/off  /hvac/heat  /hvac/auto
+    # /hvac/off  /hvac/heat  (/hvac/auto is an alias for heat)
     #
-    # The three modes Savant's Climate tile drives:
+    # The two modes Savant's Climate tile drives:
     #
     #   off   clear the setpoint, extinguish
-    #   heat  burn now at whatever flame height is set, no thermostat
-    #   auto  burn until the setpoint is met, at whatever setpoint the
-    #         appliance already holds (68 F if it has never been set)
+    #   heat  ignite and hold the setpoint the appliance already has
+    #         (68 F if it has never been set)
+    #
+    # Savant's Auto means auto-changeover, which implies a cool side and makes
+    # Blueprint mark the component cooling-capable, so it is not offered. Heat
+    # is the thermostatic mode. To burn regardless of temperature use
+    # /power/on — that is what the trigger service drives. The alias keeps any
+    # button already bound to auto working.
     #
     # Each mode is two appliance commands, because the appliance models power
     # and thermostat separately. The first goes through the controller
@@ -174,26 +179,22 @@ module IntellifireBridge
         remember_setpoint
         @controller.send_command('thermostat_setpoint', 0)
         send_simple('power', 0)
-      when 'heat'
-        remember_setpoint
-        @controller.send_command('thermostat_setpoint', 0)
-        send_simple('power', 1)
-      when 'auto'
+      when 'heat', 'auto'
         @controller.send_command('power', 1)
-        send_simple('thermostat_setpoint', auto_setpoint)
-      else raise ArgumentError, "hvac expects off/heat/auto, got #{word.inspect}"
+        send_simple('thermostat_setpoint', heat_setpoint)
+      else raise ArgumentError, "hvac expects off/heat, got #{word.inspect}"
       end
     end
 
     # Turning the thermostat off means zeroing its setpoint on the appliance,
-    # which loses the number. Keep a copy so returning to Auto returns to the
+    # which loses the number. Keep a copy so returning to Heat returns to the
     # temperature the user actually chose rather than a default.
     def remember_setpoint
       current = @controller.status['setpoint_f'].to_i
       @remembered_setpoint_f = current if current > 32
     end
 
-    def auto_setpoint
+    def heat_setpoint
       current = @controller.status['setpoint_f'].to_i
       return f_to_raw(current) if current > 32
       return f_to_raw(@remembered_setpoint_f) if @remembered_setpoint_f

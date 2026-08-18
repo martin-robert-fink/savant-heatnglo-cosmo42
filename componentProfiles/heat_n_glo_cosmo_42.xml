@@ -248,7 +248,7 @@
                                 owning_logical_component="Fireplace"
                                 state_center_binding="CurrentHVACMode"
                                 state_center_type="string"
-                                note="Off, Heat or Auto">Off</dynamic_state_variable>
+                                note="Off or Heat">Off</dynamic_state_variable>
         <dynamic_state_variable name="IsCurrentHVACModeOff"
                                 owning_logical_component="Fireplace"
                                 state_center_binding="IsCurrentHVACModeOff"
@@ -256,10 +256,6 @@
         <dynamic_state_variable name="IsCurrentHVACModeHeat"
                                 owning_logical_component="Fireplace"
                                 state_center_binding="IsCurrentHVACModeHeat"
-                                state_center_type="integer">0</dynamic_state_variable>
-        <dynamic_state_variable name="IsCurrentHVACModeAuto"
-                                owning_logical_component="Fireplace"
-                                state_center_binding="IsCurrentHVACModeAuto"
                                 state_center_type="integer">0</dynamic_state_variable>
     </state_variable_list>
 
@@ -346,9 +342,6 @@
                     </values>
                     <values path="/none/hvac_mode_heat" matches_required="at_least_one">
                         <update state="IsCurrentHVACModeHeat_1_1" type="integer"/>
-                    </values>
-                    <values path="/none/hvac_mode_auto" matches_required="at_least_one">
-                        <update state="IsCurrentHVACModeAuto_1_1" type="integer"/>
                     </values>
 
                     <values path="/none/timer" matches_required="at_least_one">
@@ -544,16 +537,23 @@
         <!-- ============================================================
              HVAC RESOURCE - THE CLIMATE TILE
              This is what puts the fireplace under Climate with an ambient
-             temperature reading, a heat setpoint, and three modes:
+             temperature reading, a heat setpoint, and two modes:
 
                Off    clear the setpoint and extinguish
-               Heat   burn now at the current flame height, no thermostat
-               Auto   burn until the setpoint is met
+               Heat   ignite and hold the setpoint
 
-             Savant's HVAC vocabulary has no "on", so Heat is the plain-on
-             mode. Cool and the fan modes are deliberately absent: the
-             appliance cannot cool, and this profile does not model its blower
-             here (that is a Lighting entity, above, for units that have one).
+             Auto is deliberately NOT declared. In Savant it means
+             auto-changeover, which implies a cool side: declare it and
+             Blueprint marks the component cooling-capable and greys the Cool
+             checkbox on in HVAC Settings, so the Pro App draws a Cool button
+             that can never work. Heat already means "heat to the heat
+             setpoint", which is the whole behaviour a thermostatic fireplace
+             has.
+
+             To burn regardless of temperature, use the trigger service's
+             On/Off tile — that is what it is for. Cool and the fan modes are
+             absent for the same reason: the appliance cannot cool, and its
+             blower is a Lighting entity above, on units that have one.
 
              Add ONE thermostat entity in the Blueprint data table, addressed
              ThermostatAddress = 1, ThermostatAddress2 = 1, matching the _1_1
@@ -584,18 +584,6 @@
                 <command_interface interface="ip">
                     <command response_required="no">
                         <command_string type="character" http_request_type="GET">hvac/heat</command_string>
-                        <delay ms_delay="200"/>
-                    </command>
-                </command_interface>
-                <execute_action_after_delay ms_delay="1500" action_name="GetFireplaceStatus" action_type="CUSTOM"/>
-            </action>
-
-            <action name="SetHVACModeAuto">
-                <action_argument name="ThermostatAddress" note="1 - the only thermostat on this component"/>
-                <action_argument name="ThermostatAddress2" note="1 - not used, addressing only"/>
-                <command_interface interface="ip">
-                    <command response_required="no">
-                        <command_string type="character" http_request_type="GET">hvac/auto</command_string>
                         <delay ms_delay="200"/>
                     </command>
                 </command_interface>

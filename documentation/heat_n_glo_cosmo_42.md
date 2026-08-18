@@ -102,7 +102,7 @@ Click **Generate Services**. The profile declares three resources, so you get up
 
 | Service | What it gives you | Needs a data table entity? |
 |---|---|---|
-| **HVAC / Climate** | Ambient temperature, heat setpoint, Off / Heat / Auto | yes — one thermostat entity |
+| **HVAC / Climate** | Ambient temperature, heat setpoint, Off / Heat | yes — one thermostat entity |
 | **Trigger Controlled Device** | Plain On / Off tile | no |
 | **Lighting Control** | 0–100 sliders for flame, accent light, blower | yes — one entity per channel |
 
@@ -127,17 +127,18 @@ Add **one thermostat entity** to the HVAC data table, addressed:
 
 Those two values must be `1`/`1` — the profile's status parser publishes its climate states under the matching `_1_1` suffix (`ThermostatCurrentTemperature_1_1`, `CurrentHVACMode_1_1`, and so on), which is the vocabulary Savant's Climate tile binds to.
 
-The three modes, and what each does to the appliance:
+Two modes, and what each does to the appliance:
 
 | App mode | Bridge call | Appliance |
 |---|---|---|
 | **Off** | `GET /hvac/off` | Clears the setpoint, extinguishes |
-| **Heat** | `GET /hvac/heat` | Clears the setpoint, ignites — burns at the current flame height regardless of temperature |
-| **Auto** | `GET /hvac/auto` | Ignites and restores the setpoint — burns until the room reaches it |
+| **Heat** | `GET /hvac/heat` | Ignites and restores the setpoint — burns until the room reaches it |
 
-Savant's HVAC vocabulary has no "On", so **Heat is the plain-on mode**. Cool never appears; the appliance cannot cool. Fan modes and humidity are deliberately not modelled.
+**Heat is the thermostatic mode**, not a plain on: it hands the fireplace to its own thermostat. To burn regardless of temperature, use the trigger service's On/Off tile. `Auto` is not declared — see §6a for why — and Cool never appears, because the appliance cannot cool. Fan modes and humidity are not modelled.
 
-> **Why the bridge remembers your setpoint.** Turning the appliance's thermostat off means writing a setpoint of `0` — there is no separate disable. So leaving Auto would otherwise discard the temperature you chose. The bridge keeps a copy and restores it when you return to Auto; only if it has never seen one does it fall back to 68 °F.
+`/hvac/auto` still answers as an alias for `/hvac/heat`, so anything bound to it before this change keeps working.
+
+> **Why the bridge remembers your setpoint.** Turning the appliance's thermostat off means writing a setpoint of `0` — there is no separate disable. So switching to Off would otherwise discard the temperature you chose. The bridge keeps a copy and restores it when you return to Heat; only if it has never seen one does it fall back to 68 °F.
 
 Mode changes confirm about 1.5 s after you tap, when the follow-up status fetch lands. That lag is deliberate — the appliance's own report is authoritative, rather than the tile asserting a state it only hopes is true.
 
@@ -167,14 +168,22 @@ Only add entities for accessories your appliance actually has. `curl http://127.
 
 ---
 
-## 6a. A custom UI screen (recommended over the stock Climate tile)
+## 6a. How the controls are split, and driving them from elsewhere
 
-The stock Climate tile has two flaws for a fireplace, and neither can be fixed from the profile:
+**There is no custom screen to build.** The Savant Pro App composes its screens from services at runtime; a Pro-App-only system stores no per-service layout anywhere in its configuration, and hand-placed widgets exist only for physical Savant touch panels (`panelConfiguration.plist`). So the controls land where the services put them:
 
-- **A Cool button that cannot be removed.** In Blueprint's **HVAC Settings** table, `Cool` shows ticked *and greyed out* for this component. Savant's `Auto` means auto-**changeover**, which by definition implies a cool side, so declaring `SetHVACModeAuto` forces cooling capability on. (Drop Auto and use Heat as the thermostatic mode and it should release — at the cost of a mode.)
-- **A Fan On/Auto row** drawn by the Climate screen template even though the service declares no `SetFanMode*` requests at all.
+| Control | Where it appears |
+|---|---|
+| Ignite and hold a temperature | **Climate** tile → `Heat`, with the setpoint |
+| Room temperature | **Climate** tile |
+| Burn regardless of temperature | **Trigger** tile → On/Off |
+| Flame height | **Lights** tile, if you add the Lighting entity — or custom-action buttons |
 
-A custom screen sidesteps both: you place exactly the controls you want. Everything below is verified against a live system — states read back through `sclibridge`, and the request syntax accepted by the host.
+That split is why `Auto` is not declared. Savant's `Auto` means auto-**changeover**, which implies a cool side: declare it and Blueprint marks the component cooling-capable and greys `Cool` **on** in the HVAC Settings table, so the app draws a Cool button that can never do anything. `Heat` already means "heat to the heat setpoint", so nothing is lost.
+
+> **The fan row may not be removable.** The generated service declares no `SetFanMode*` requests at all — verified against the config — so if the Climate screen still draws Fan On/Auto, it is the app's fixed template and no profile change will affect it.
+
+Everything below is verified against a live system: states read back through `sclibridge`, and the request syntax accepted by the host. Use it for **workflows, scenes, triggers and keypad buttons**, which drive services directly rather than through the app's screens.
 
 ### Buttons
 
@@ -183,8 +192,7 @@ Every HVAC request takes the entity's address, `ThermostatAddress = 1` and `Ther
 | Control | Service request | Highlight when |
 |---|---|---|
 | **Off** | `SetHVACModeOff` | `IsCurrentHVACModeOff_1_1` = 1 |
-| **On** | `SetHVACModeHeat` | `IsCurrentHVACModeHeat_1_1` = 1 |
-| **Auto** | `SetHVACModeAuto` | `IsCurrentHVACModeAuto_1_1` = 1 |
+| **Heat** | `SetHVACModeHeat` | `IsCurrentHVACModeHeat_1_1` = 1 |
 | **Setpoint ▲** | `IncreaseHeatPointTemperature` | — |
 | **Setpoint ▼** | `DecreaseHeatPointTemperature` | — |
 | **Setpoint (absolute)** | `SetHeatPointTemperature`, arg `HeatPointTemperature` | — |
@@ -206,7 +214,7 @@ State names are `<Component>.<LogicalComponent>.<State>`, e.g. `Living Room Fire
 |---|---|---|
 | Room temperature | `CurrentTemperatureF` | also as `ThermostatCurrentTemperature_1_1` |
 | Setpoint | `ThermostatCurrentHeatPoint_1_1` | `32` means the thermostat is off |
-| Mode | `CurrentHVACMode_1_1` | `Off`, `Heat` or `Auto` |
+| Mode | `CurrentHVACMode_1_1` | `Off` or `Heat` |
 | Burner | `IsFireplaceOn` | 1 when lit |
 | Flame | `FlameHeightPercent` / `DimmerLevel_1` | 0–100 |
 | Still hot | `IsHot` | 1 while cooling down — worth showing |
